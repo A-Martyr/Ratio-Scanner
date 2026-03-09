@@ -3,6 +3,8 @@ import YahooFinance from 'yahoo-finance2';
 
 const yahooFinance = new YahooFinance();
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const ticker = searchParams.get('ticker');
@@ -17,46 +19,56 @@ export async function GET(request: Request) {
     });
 
     const financials = await yahooFinance.fundamentalsTimeSeries(ticker.toUpperCase(), {
-      period1: new Date(Date.now() - 365 * 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      period1: new Date(Date.now() - 365 * 6 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
       module: 'all',
-      type: 'quarterly'
+      type: 'annual'
     });
 
     if (!financials || financials.length === 0) {
       return NextResponse.json({ error: 'Incomplete financial data for this ticker' }, { status: 404 });
     }
 
-    const latest = financials[financials.length - 1] as any;
     const priceInfo = quote.price;
-
-    const currentAssets = latest.currentAssets || 0;
-    const currentLiabilities = latest.currentLiabilities || 0;
-    const totalLiabilities = latest.totalLiabilitiesNetMinorityInterest || 0;
-    const totalEquity = latest.stockholdersEquity || 0;
-    const netIncome = latest.netIncome || 0;
     const companyName = priceInfo?.longName || priceInfo?.shortName || ticker.toUpperCase();
 
-    const currentRatio = currentLiabilities ? (currentAssets / currentLiabilities) : null;
-    const debtToEquity = totalEquity ? (totalLiabilities / totalEquity) : null;
-    
-    // Annualize the quarterly net income to get a standard ROE
-    const returnOnEquity = totalEquity ? ((netIncome * 4) / totalEquity) : null;
+    // Map the financials to an array of historical snapshots (up to 5 most recent years)
+    const history = financials.slice(-5).map((yearlyData: any) => {
+      const currentAssets = yearlyData.currentAssets || 0;
+      const currentLiabilities = yearlyData.currentLiabilities || 0;
+      const totalLiabilities = yearlyData.totalLiabilitiesNetMinorityInterest || 0;
+      const totalEquity = yearlyData.stockholdersEquity || 0;
+      const netIncome = yearlyData.netIncome || 0;
+      
+      let year = new Date().getFullYear();
+      if (yearlyData.date || yearlyData.asOfDate) {
+         year = new Date(yearlyData.date || yearlyData.asOfDate).getFullYear();
+      }
+
+      const currentRatio = currentLiabilities ? (currentAssets / currentLiabilities) : null;
+      const debtToEquity = totalEquity ? (totalLiabilities / totalEquity) : null;
+      const returnOnEquity = totalEquity ? (netIncome / totalEquity) : null;
+
+      return {
+        year,
+        metrics: {
+          currentRatio,
+          debtToEquity,
+          returnOnEquity
+        },
+        raw: {
+          currentAssets,
+          currentLiabilities,
+          totalLiabilities,
+          totalEquity,
+          netIncome 
+        }
+      };
+    });
 
     return NextResponse.json({
       ticker: ticker.toUpperCase(),
       name: companyName,
-      metrics: {
-        currentRatio,
-        debtToEquity,
-        returnOnEquity
-      },
-      raw: {
-        currentAssets,
-        currentLiabilities,
-        totalLiabilities,
-        totalEquity,
-        netIncome: netIncome * 4 
-      }
+      history
     });
 
   } catch (error: any) {
